@@ -1,0 +1,26 @@
+{
+  "canisters": {
+    "dapphire_rust_backend_backend": {
+      "candid": "src/dapphire_rust_backend_backend/dapphire_rust_backend_backend.did",
+      "package": "dapphire_rust_backend_backend",
+      "type": "rust"
+    },
+    "dapphire_rust_backend_frontend": {
+      "dependencies": [
+        "dapphire_rust_backend_backend"
+      ],
+      "source": [
+        "src/dapphire_rust_backend_frontend/assets"
+      ],
+      "type": "assets"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
