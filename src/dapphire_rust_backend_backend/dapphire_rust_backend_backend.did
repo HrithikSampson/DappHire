@@ -1,3 +1,57 @@
+
+type Status = variant {
+    Rejected;
+    Applied;
+    Round : nat8;
+    Accepted;
+};
+
+type Employer = record {
+    name: text;
+    organisation: text;
+};
+
+type Applicant = record {
+    applicant_id: principal;
+    name: text;
+    applicant_address: text;
+    bio: text;
+    applied_jobs: vec nat8;
+};
+
+type Account = variant {
+    Applicant : Applicant;
+    Employer : Employer;
+};
+
+type Job = record {
+    id: nat;
+    name: text;
+    description: text;
+    owner: principal;
+};
+type JobStatusList = vec record { nat; vec record{Status; vec principal} };
+type Jobs = vec record { nat; Job};
+type Profiles = vec record { principal; Account};
+
+type DappHireService = record {
+    job_status_list: JobStatusList;
+    jobs: Jobs;
+    profiles: Profiles;
+};
+
+type Result = variant { ok : null; err : text; };
+
+type ResultApplicant = variant { ok : Applicant; err : text; };
+
 service : {
-    "greet": (text) -> (text) query;
+    create_applicant_account : (text, text) -> (Result);
+    create_employer_account : (text, text) -> (Result);
+    get_all_jobs : () -> (vec Job) query;
+    get_job_status : (nat) -> (JobStatusList) query;
+    get_profile : (principal) -> (Account) query;
+    create_job : (text, text, nat8) -> (Job);
+    move_application_status : (nat, principal) -> (Result);
+    view_private_applications : (principal) -> (ResultApplicant) query;
+    reject_application_status : (principal) -> (ResultApplicant) query;
 }
