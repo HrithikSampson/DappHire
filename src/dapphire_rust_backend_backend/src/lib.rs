@@ -2,32 +2,32 @@
 use candid::{CandidType, Decode, Deserialize, Encode, Principal};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{DefaultMemoryImpl,BoundedStorable, StableBTreeMap, Storable};
-use std::borrow::BorrowMut;
 use std::hash::Hash;
 use std::{borrow::Cow, cell::RefCell}; 
 use std::collections::HashMap;
+use ic_cdk::init;
 
-#[derive(CandidType,Deserialize,Eq,PartialEq,Hash,Clone)]
+#[derive(CandidType,Deserialize,Eq,PartialEq,Hash,Clone,Debug)]
 enum Status {
     Rejected,
     Applied,
     Round(u8),
     Accepted,
 }
-#[derive(Clone,CandidType,Deserialize)]
+#[derive(Clone,CandidType,Deserialize,Debug)]
 enum Account {
     Applicant(Applicant),
     Employer(Employer),
 }
 
 
-#[derive(Clone,CandidType,Deserialize)]
+#[derive(Clone,CandidType,Deserialize,Debug)]
 struct Employer{
     pub name: String,
     pub organisation: String,
 }
 
-#[derive(Clone,CandidType,Deserialize)]
+#[derive(Clone,CandidType,Deserialize,Debug)]
 struct Applicant{
     pub applicant_id: Principal,
     name: String,
@@ -39,7 +39,7 @@ struct Applicant{
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
 
-#[derive(CandidType,Deserialize,Eq,PartialEq,Hash,Clone)]
+#[derive(CandidType,Deserialize,Eq,PartialEq,Hash,Clone,Debug)]
 struct Job {
     pub id: usize,
     pub num_rounds: u8,
@@ -47,7 +47,7 @@ struct Job {
     pub description: String,
     pub owner: Principal,
 }
-#[derive(CandidType, Deserialize,Clone)]
+#[derive(CandidType, Deserialize,Clone,Debug)]
 struct DappHireService {
     job_status_list: HashMap<usize,HashMap<Status, Vec<Principal>>>,
     jobs: HashMap<usize,Job>,
@@ -70,8 +70,25 @@ const MAX_VALUE_SIZE: u32 = 10000;
 // Implement BoundedStorable for Event
 impl BoundedStorable for DappHireService
 {
-    const MAX_SIZE: u32 = MAX_VALUE_SIZE; // Adjust the size as needed
+    const MAX_SIZE: u32 = MAX_VALUE_SIZE;
     const IS_FIXED_SIZE: bool = false;
+}
+const SERVICE_ID: u64 = 0;
+#[init]
+fn init() {
+    ic_cdk::setup();
+    let init_state = DappHireService {
+        job_status_list: HashMap::new(),
+        jobs: HashMap::new(),
+        profiles: HashMap::new(),
+    };
+    ic_cdk::println!("Init");
+    HIRE_SERVICE_MAP.with(|service| {
+        
+        service.borrow_mut().insert(SERVICE_ID, init_state);
+        ic_cdk::println!("{}",service.borrow().len());
+    });
+
 }
 
 thread_local! {
@@ -84,15 +101,82 @@ thread_local! {
         )
     );
 }
-
-const SERVICE_ID: u64 = 0;
+//apply to a job
+#[ic_cdk::update]
+fn apply_job(job_id:usize)->Result<(),String> {
+    HIRE_SERVICE_MAP.with(|hire_ref | {
+        ic_cdk::println!("{:?}",hire_ref.borrow().len());
+        let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
+        let job = service.jobs.get(&job_id);
+        let profile = service.profiles.get_mut(&ic_cdk::api::caller());
+        return match job{
+            None => Err("No Job Exists with this Job Id".to_string()),
+            Some(job_apply) => return match profile {
+                Some(account) => match account {
+                    Account::Applicant(applicant) => {
+                        applicant.applied_jobs.push(job_apply.id);
+                        let is_key = service.job_status_list.contains_key(&job_id);
+                        if !is_key {
+                            service.job_status_list.insert(job_id,HashMap::new());
+                        };
+                        let status_map = service.job_status_list.get_mut(&job_id).unwrap();
+                        if !status_map.contains_key(&Status::Applied) {
+                            status_map.insert(Status::Applied, Vec::new());
+                        }
+                        let mut vec_principal = status_map.get(&Status::Applied).unwrap().clone();
+                        vec_principal.push(ic_cdk::api::caller());
+                        status_map.insert(Status::Applied,vec_principal);
+                        hire_ref.borrow_mut().insert(SERVICE_ID, service);
+                        Ok(())
+                    },
+                    Account::Employer(_) => Err("Employer Account can't apply".to_string()),
+                },
+                None => {
+                    return Err("Applicant Profile Doesnt exist for this Account".to_string());
+                }
+                
+            }
+        };
+        
+    })
+}
+#[ic_cdk::query]
+fn get_id() -> Principal {
+    return ic_cdk::api::caller();
+}
+#[ic_cdk::query]
+fn get_applied_jobs()->Result<Vec<Job>,String> {
+    HIRE_SERVICE_MAP.with(|hire_ref | {
+        ic_cdk::println!("{:?}",hire_ref.borrow().len());
+        let service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
+        let profile = service.profiles.get(&ic_cdk::api::caller());
+        match profile {
+            Some(Account::Employer(_)) => {
+                // If the caller is an Applicant, return an error
+                return Err("Applicants are not allowed to create jobs.".to_string())
+            },
+            Some(Account::Applicant(profile)) => {
+                return Ok(profile.applied_jobs.clone().into_iter().map(|j| service.jobs.get(&j).unwrap().clone()).collect());
+            },
+            None => {
+                return Err("You need to create an employee Account to create jobs".to_string());
+            }
+        }
+    })
+}
 // Function to create new Profile
 #[ic_cdk::update]
 fn create_applicant_account(name: String, bio: String )->Result<(),String> {
+    
+
     HIRE_SERVICE_MAP.with(|hire_ref | {
+        ic_cdk::println!("{:?}",hire_ref.borrow().len());
         let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
-        let profile = service.borrow_mut().profiles.borrow_mut().get(&ic_cdk::api::caller());
-        return match profile {
+        
+        ic_cdk::println!("{:?}",ic_cdk::api::caller());
+        let profile = service.profiles.get(&ic_cdk::api::caller());
+        
+        let ret = match profile {
             Some(_account) => Err("Profile Already Exists".to_string()),
             None => {
                 let new_profile = Account::Applicant(Applicant {
@@ -102,35 +186,44 @@ fn create_applicant_account(name: String, bio: String )->Result<(),String> {
                     applied_jobs: Vec::new(),
                 });
                 service.profiles.insert(ic_cdk::api::caller(), new_profile);
-    
+                hire_ref.borrow_mut().insert(SERVICE_ID, service);
                 Ok(())
             }
-        }
+        };
+        
+        return ret;
     })
 }
 
 #[ic_cdk::update]
 fn create_employer_account(name: String, organisation: String )->Result<(),String> {
+
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
-        let profile = service.borrow_mut().profiles.borrow_mut().get(&ic_cdk::api::caller());
-        return match profile {
+        ic_cdk::println!("{:?}",hire_ref.borrow().len());
+        ic_cdk::println!("{:?}",ic_cdk::api::caller());
+        let profile = service.profiles.get(&ic_cdk::api::caller());
+        let ret = match profile {
             Some(_account) => Err("Profile Already Exists".to_string()),
             None => {
+                ic_cdk::println!("None");
                 let new_profile = Account::Employer(Employer {
                     name,
                     organisation
                 });
                 service.profiles.insert(ic_cdk::api::caller(), new_profile);
-    
+                hire_ref.borrow_mut().insert(SERVICE_ID, service);
                 Ok(())
             }
-        }
+        };
+        
+        return ret;
     })
 }
 
 #[ic_cdk::query]
 fn get_all_jobs() -> Vec<Job> {
+
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
         return service.jobs.into_iter().map(|(_,v)|  v ).collect();
@@ -140,6 +233,7 @@ fn get_all_jobs() -> Vec<Job> {
 
 #[ic_cdk::query]
 fn get_job_status(job_id: usize) -> HashMap<Status,Vec<Principal>> {
+
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
         return service.job_status_list.get(&job_id).cloned().unwrap();
@@ -148,6 +242,7 @@ fn get_job_status(job_id: usize) -> HashMap<Status,Vec<Principal>> {
 
 #[ic_cdk::query]
 fn get_profile(profile_id: Principal) -> Account {
+    
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
         return service.profiles.get(&profile_id).cloned().unwrap();
@@ -156,24 +251,49 @@ fn get_profile(profile_id: Principal) -> Account {
 
 //create new job
 #[ic_cdk::update]
-async fn create_job(name: String,description: String,num_rounds: u8) -> Job {
+async fn create_job(name: String,description: String,num_rounds: u8) -> Result<Job,String> {
+    
     HIRE_SERVICE_MAP.with(|hire_ref | {
-        let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
-        let len = service.jobs.len();
-        let job = Job {
-            id: len,
-            num_rounds: num_rounds,
-            name: name,
-            description: description,
-            owner: ic_cdk::api::caller(),
-        };
-        service.jobs.insert(len, job);
-        return service.jobs.get(&len).cloned().unwrap();
+        
+        let service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
+        match service.profiles.get(&ic_cdk::api::caller()) {
+            Some(Account::Applicant(_)) => {
+                Err("Applicants are not allowed to create jobs.".to_string())
+            },
+            Some(Account::Employer(_)) => {
+                let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
+                let len = service.jobs.len();
+                let job = Job {
+                    id: len,
+                    num_rounds: num_rounds,
+                    name: name,
+                    description: description,
+                    owner: ic_cdk::api::caller(),
+                };
+                
+                service.jobs.insert(len, job);
+                let mut status_map: HashMap<Status, Vec<Principal>> = HashMap::new(); 
+                status_map.insert(Status::Accepted,Vec::new());
+                status_map.insert(Status::Applied, Vec::new());
+                status_map.insert(Status::Rejected, Vec::new());
+                for i in 0..num_rounds {
+                    status_map.insert(Status::Round(i),Vec::new());
+                }
+                service.job_status_list.insert(len,status_map);
+                let ret = service.jobs.get(&len).cloned().unwrap();
+                hire_ref.borrow_mut().insert(SERVICE_ID, service);
+                return Ok(ret);
+            },
+            None => {
+                return Err("You need to create an employee Account to create jobs".to_string());
+            }
+        }
     })
 }
 
 #[ic_cdk::update]
 fn move_application_status(job_id: usize, applicant_id: Principal) -> Result<(), String> {
+    
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
         let job = service.jobs.get(&job_id).ok_or("Job not found")?;
@@ -212,6 +332,7 @@ fn move_application_status(job_id: usize, applicant_id: Principal) -> Result<(),
                         }
                     }
                 }
+                hire_ref.borrow_mut().insert(SERVICE_ID, service);
                 Ok(())
             } else {
                 Err("Applicants are not allowed to do this".to_string())
@@ -225,6 +346,7 @@ fn move_application_status(job_id: usize, applicant_id: Principal) -> Result<(),
 
 #[ic_cdk::update]
 fn reject_application_status(job_id: usize, applicant_id: Principal) -> Result<(), String> {
+    
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let mut service = hire_ref.borrow_mut().get(&SERVICE_ID).unwrap();
         let job = service.jobs.get(&job_id).ok_or("Job not found")?;
@@ -253,6 +375,7 @@ fn reject_application_status(job_id: usize, applicant_id: Principal) -> Result<(
                         job_status.entry(Status::Rejected).or_default().push(applicant_id);
                     }
                 }
+                hire_ref.borrow_mut().insert(SERVICE_ID, service);
                 Ok(())
             } else {
                 Err("Applicants are not allowed to do this".to_string())
@@ -265,6 +388,7 @@ fn reject_application_status(job_id: usize, applicant_id: Principal) -> Result<(
 
 #[ic_cdk::query]
 fn view_private_applications(applicant_id: Principal) -> Result<Applicant, String> {
+    
     HIRE_SERVICE_MAP.with(|hire_ref | {
         let service = hire_ref.borrow().get(&SERVICE_ID).unwrap();
         let current_account = service.profiles.get(&ic_cdk::api::caller()).cloned().unwrap();
@@ -298,3 +422,4 @@ fn view_private_applications(applicant_id: Principal) -> Result<Applicant, Strin
         }
     })
 }
+ic_cdk_macros::export_candid!();

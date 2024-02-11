@@ -1,57 +1,34 @@
-
-type Status = variant {
-    Rejected;
-    Applied;
-    Round : nat8;
-    Accepted;
-};
-
-type Employer = record {
-    name: text;
-    organisation: text;
-};
-
+type Account = variant { Employer : Employer; Applicant : Applicant };
 type Applicant = record {
-    applicant_id: principal;
-    name: text;
-    applicant_address: text;
-    bio: text;
-    applied_jobs: vec nat8;
+  bio : text;
+  applied_jobs : vec nat64;
+  name : text;
+  applicant_id : principal;
 };
-
-type Account = variant {
-    Applicant : Applicant;
-    Employer : Employer;
-};
-
+type Employer = record { name : text; organisation : text };
 type Job = record {
-    id: nat;
-    name: text;
-    description: text;
-    owner: principal;
+  id : nat64;
+  owner : principal;
+  name : text;
+  description : text;
+  num_rounds : nat8;
 };
-type JobStatusList = vec record { nat; vec record{Status; vec principal} };
-type Jobs = vec record { nat; Job};
-type Profiles = vec record { principal; Account};
-
-type DappHireService = record {
-    job_status_list: JobStatusList;
-    jobs: Jobs;
-    profiles: Profiles;
-};
-
-type Result = variant { ok : null; err : text; };
-
-type ResultApplicant = variant { ok : Applicant; err : text; };
-
-service : {
-    create_applicant_account : (text, text) -> (Result);
-    create_employer_account : (text, text) -> (Result);
-    get_all_jobs : () -> (vec Job) query;
-    get_job_status : (nat) -> (JobStatusList) query;
-    get_profile : (principal) -> (Account) query;
-    create_job : (text, text, nat8) -> (Job);
-    move_application_status : (nat, principal) -> (Result);
-    view_private_applications : (principal) -> (ResultApplicant) query;
-    reject_application_status : (principal) -> (ResultApplicant) query;
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : Job; Err : text };
+type Result_2 = variant { Ok : vec Job; Err : text };
+type Result_3 = variant { Ok : Applicant; Err : text };
+type Status = variant { Applied; Round : nat8; Rejected; Accepted };
+service : () -> {
+  apply_job : (nat64) -> (Result);
+  create_applicant_account : (text, text) -> (Result);
+  create_employer_account : (text, text) -> (Result);
+  create_job : (text, text, nat8) -> (Result_1);
+  get_all_jobs : () -> (vec Job) query;
+  get_applied_jobs : () -> (Result_2) query;
+  get_id : () -> (principal) query;
+  get_job_status : (nat64) -> (vec record { Status; vec principal }) query;
+  get_profile : (principal) -> (Account) query;
+  move_application_status : (nat64, principal) -> (Result);
+  reject_application_status : (nat64, principal) -> (Result);
+  view_private_applications : (principal) -> (Result_3) query;
 }
